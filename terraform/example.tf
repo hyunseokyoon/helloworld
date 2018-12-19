@@ -22,3 +22,11 @@ resource "aws_eip" "ip" {
 output "ip" {
   value = "${aws_eip.ip.public_ip}"
 }
+
+terraform {
+  backend "s3" {
+    bucket = "terraform.worker.yoon"
+    key = "terraform.tfstate"
+    region = "ap-northeast-2"
+  }
+}
