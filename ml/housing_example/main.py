@@ -61,6 +61,7 @@ def train_model(learning_rate, steps, batch_size, input_feature="total_rooms"):
     plt.ylabel(my_label)
     plt.xlabel(my_feature)
     sample = california_housing_dataframe.sample(n=300)
+
     plt.scatter(sample[my_feature], sample[my_label])
     colors = [cm.coolwarm(x) for x in np.linspace(-1, 1, periods)]
 
@@ -101,12 +102,13 @@ def train_model(learning_rate, steps, batch_size, input_feature="total_rooms"):
     plt.title("Root Mean Squared Error vs. Periods")
     plt.tight_layout()
     plt.plot(root_mean_squared_errors)
-    plt.show()
 
     calibration_data = pd.DataFrame()
     calibration_data["predictions"] = pd.Series(predictions)
     calibration_data["targets"] = pd.Series(targets)
     display.display(calibration_data.describe())
+
+    plt.show()
 
     print("Final RMSE (on training data): %0.2f" % root_mean_squared_error)
 
@@ -126,8 +128,21 @@ california_housing_dataframe = california_housing_dataframe.reindex(
     np.random.permutation(california_housing_dataframe.index))
 california_housing_dataframe["median_house_value"] /= 1000
 
+# synthetic feature
+california_housing_dataframe["room_per_person"] = california_housing_dataframe["total_rooms"] / \
+                                                  california_housing_dataframe["population"]
+
+# handle outlier
+california_housing_dataframe["room_per_person"] = california_housing_dataframe["room_per_person"].apply(
+    lambda x: min(x, 5))
+
+plt.subplot(1, 2, 1)
+_ = california_housing_dataframe["room_per_person"].hist()
+plt.show()
+
 train_model(
-    learning_rate=0.0001,
+    learning_rate=0.05,
     steps=500,
-    batch_size=100
+    batch_size=5,
+    input_feature="room_per_person"
 )
