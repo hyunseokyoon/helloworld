@@ -1,3 +1,9 @@
+IPython
+sklearn
+matplotlib
+numpy
+pandas
+tensorflow
 certifi==2018.11.29
 chardet==3.0.4
 idna==2.8
