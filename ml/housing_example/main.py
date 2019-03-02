@@ -3,29 +3,14 @@ from __future__ import print_function
 import math
 
 from IPython import display
-import numpy as np
-import tensorflow as tf
-import pandas as pd
-
 from matplotlib import cm
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
-
+import numpy as np
+import pandas as pd
 from sklearn import metrics
+import tensorflow as tf
 from tensorflow.python.data import Dataset
-
-
-def construct_feature_columns(input_features):
-    """Construct the TensorFlow Feature Columns.
-
-    Args:
-      input_features: The names of the numerical input features to use.
-    Returns:
-      A set of feature columns
-    """
-    return set([tf.feature_column.numeric_column(my_feature)
-                for my_feature in input_features])
-
 
 def preprocess_features(california_housing_dataframe):
     """Prepares input features from California housing data set.
@@ -69,21 +54,6 @@ def preprocess_targets(california_housing_dataframe):
             california_housing_dataframe["median_house_value"] / 1000.0)
     return output_targets
 
-
-def check_geo(examples, targets):
-    plt.figure(figsize=(13, 8))
-
-    ax = plt.subplot(1, 2, 1)
-    ax.set_ylim([32, 43])
-    ax.set_xlim([-125, -114])
-    ax.set_autoscaley_on(False)
-    ax.set_autoscalex_on(False)
-    plt.scatter(examples['longitude'], examples['latitude'], cmap="coolwarm",
-                c=targets["median_house_value"] / targets["median_house_value"].max())
-
-    plt.show()
-
-
 def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
     """Trains a linear regression model of multiple features.
 
@@ -111,6 +81,18 @@ def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
     # Return the next batch of data.
     features, labels = ds.make_one_shot_iterator().get_next()
     return features, labels
+
+
+def construct_feature_columns(input_features):
+    """Construct the TensorFlow Feature Columns.
+
+    Args:
+      input_features: The names of the numerical input features to use.
+    Returns:
+      A set of feature columns
+    """
+    return set([tf.feature_column.numeric_column(my_feature)
+                for my_feature in input_features])
 
 
 def train_model(
@@ -195,8 +177,7 @@ def train_model(
         validation_root_mean_squared_error = math.sqrt(
             metrics.mean_squared_error(validation_predictions, validation_targets))
         # Occasionally print the current loss.
-        print("  period %02d : %0.2f, %0.2f" % (
-        period, training_root_mean_squared_error, validation_root_mean_squared_error))
+        print("  period %02d : %0.2f, %0.2f" % (period, training_root_mean_squared_error, validation_root_mean_squared_error))
         # Add the loss metrics from this period to our list.
         training_rmse.append(training_root_mean_squared_error)
         validation_rmse.append(validation_root_mean_squared_error)
@@ -214,23 +195,18 @@ def train_model(
     return linear_regressor
 
 
-# main
 tf.logging.set_verbosity(tf.logging.ERROR)
 pd.options.display.max_rows = 10
-pd.options.display.max_columns = 100
 pd.options.display.float_format = '{:.1f}'.format
 
-# load data
 california_housing_dataframe = pd.read_csv(
     "https://download.mlcc.google.com/mledu-datasets/california_housing_train.csv", sep=",")
 
-# prepare data
 california_housing_dataframe = california_housing_dataframe.reindex(
     np.random.permutation(california_housing_dataframe.index))
 
 training_examples = preprocess_features(california_housing_dataframe.head(12000))
 training_targets = preprocess_targets(california_housing_dataframe.head(12000))
-
 validation_examples = preprocess_features(california_housing_dataframe.tail(5000))
 validation_targets = preprocess_targets(california_housing_dataframe.tail(5000))
 
@@ -243,16 +219,17 @@ linear_regressor = train_model(
     validation_examples=validation_examples,
     validation_targets=validation_targets)
 
-california_housing_test_data = pd.read_csv("https://download.mlcc.google.com/mledu-datasets/california_housing_test.csv", sep=",")
+california_housing_test_data = pd.read_csv(
+    "https://download.mlcc.google.com/mledu-datasets/california_housing_test.csv", sep=",")
 
 test_examples = preprocess_features(california_housing_test_data)
 test_targets = preprocess_targets(california_housing_test_data)
 
 predict_test_input_fn = lambda: my_input_fn(
-      test_examples,
-      test_targets["median_house_value"],
-      num_epochs=1,
-      shuffle=False)
+    test_examples,
+    test_targets["median_house_value"],
+    num_epochs=1,
+    shuffle=False)
 
 test_predictions = linear_regressor.predict(input_fn=predict_test_input_fn)
 test_predictions = np.array([item['predictions'][0] for item in test_predictions])
