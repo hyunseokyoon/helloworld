@@ -12,6 +12,7 @@ from sklearn import metrics
 import tensorflow as tf
 from tensorflow.python.data import Dataset
 
+
 def preprocess_features(california_housing_dataframe):
     """Prepares input features from California housing data set.
 
@@ -53,6 +54,7 @@ def preprocess_targets(california_housing_dataframe):
     output_targets["median_house_value"] = (
             california_housing_dataframe["median_house_value"] / 1000.0)
     return output_targets
+
 
 def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
     """Trains a linear regression model of multiple features.
@@ -177,7 +179,8 @@ def train_model(
         validation_root_mean_squared_error = math.sqrt(
             metrics.mean_squared_error(validation_predictions, validation_targets))
         # Occasionally print the current loss.
-        print("  period %02d : %0.2f, %0.2f" % (period, training_root_mean_squared_error, validation_root_mean_squared_error))
+        print("  period %02d : %0.2f, %0.2f" % (
+            period, training_root_mean_squared_error, validation_root_mean_squared_error))
         # Add the loss metrics from this period to our list.
         training_rmse.append(training_root_mean_squared_error)
         validation_rmse.append(validation_root_mean_squared_error)
@@ -191,12 +194,26 @@ def train_model(
     plt.plot(training_rmse, label="training")
     plt.plot(validation_rmse, label="validation")
     plt.legend()
+    plt.show()
 
     return linear_regressor
 
 
+def select_and_transform_features(source_df):
+    selected_features = pd.DataFrame()
+    selected_features['median_income'] = source_df['median_income']
+    selected_features['rooms_per_person'] = source_df['rooms_per_person']
+
+    for r in zip(range(32, 44), range(33, 45)):
+        selected_features['from_%d_to_%d' % r] = source_df['latitude'].apply(
+            lambda l: 1.0 if r[0] <= l <= r[1] else 0.0)
+
+    return selected_features
+
+
 tf.logging.set_verbosity(tf.logging.ERROR)
-pd.options.display.max_rows = 10
+pd.options.display.max_rows = 15
+pd.options.display.max_columns = 15
 pd.options.display.float_format = '{:.1f}'.format
 
 california_housing_dataframe = pd.read_csv(
@@ -205,24 +222,48 @@ california_housing_dataframe = pd.read_csv(
 california_housing_dataframe = california_housing_dataframe.reindex(
     np.random.permutation(california_housing_dataframe.index))
 
+# Choose the first 12000 (out of 17000) examples for training.
 training_examples = preprocess_features(california_housing_dataframe.head(12000))
 training_targets = preprocess_targets(california_housing_dataframe.head(12000))
+
+# Choose the last 5000 (out of 17000) examples for validation.
 validation_examples = preprocess_features(california_housing_dataframe.tail(5000))
 validation_targets = preprocess_targets(california_housing_dataframe.tail(5000))
 
+# Double-check that we've done the right thing.
+print("Training examples summary:")
+display.display(training_examples.describe())
+print("Validation examples summary:")
+display.display(validation_examples.describe())
+
+print("Training targets summary:")
+display.display(training_targets.describe())
+print("Validation targets summary:")
+display.display(validation_targets.describe())
+
+# correlation
+
+correlation_dataframe = training_examples.copy()
+correlation_dataframe["result"] = training_targets["median_house_value"]
+
+print(correlation_dataframe.corr())
+
+minimal_training_examples = select_and_transform_features(training_examples)
+minimal_validation_examples = select_and_transform_features(validation_examples)
+
 linear_regressor = train_model(
-    learning_rate=0.00003,
+    learning_rate=0.03,
     steps=500,
     batch_size=5,
-    training_examples=training_examples,
+    training_examples=minimal_training_examples,
     training_targets=training_targets,
-    validation_examples=validation_examples,
+    validation_examples=minimal_validation_examples,
     validation_targets=validation_targets)
 
 california_housing_test_data = pd.read_csv(
     "https://download.mlcc.google.com/mledu-datasets/california_housing_test.csv", sep=",")
 
-test_examples = preprocess_features(california_housing_test_data)
+test_examples = select_and_transform_features(preprocess_features(california_housing_test_data))
 test_targets = preprocess_targets(california_housing_test_data)
 
 predict_test_input_fn = lambda: my_input_fn(
