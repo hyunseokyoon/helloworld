@@ -127,7 +127,7 @@ california_housing_dataframe = california_housing_dataframe.reindex(
 california_housing_dataframe["median_house_value"] /= 1000
 
 train_model(
-    learning_rate=0.001,
-    steps=100,
-    batch_size=1
+    learning_rate=0.0001,
+    steps=500,
+    batch_size=100
 )
