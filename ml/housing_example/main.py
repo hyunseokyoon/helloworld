@@ -51,8 +51,8 @@ def preprocess_targets(california_housing_dataframe):
     """
     output_targets = pd.DataFrame()
     # Scale the target to be in units of thousands of dollars.
-    output_targets["median_house_value"] = (
-            california_housing_dataframe["median_house_value"] / 1000.0)
+    output_targets["median_house_value_is_high"] = (
+            california_housing_dataframe["median_house_value"] > 265000).astype(float)
     return output_targets
 
 
@@ -85,6 +85,18 @@ def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
     return features, labels
 
 
+def construct_feature_columns(input_features):
+  """Construct the TensorFlow Feature Columns.
+
+  Args:
+    input_features: The names of the numerical input features to use.
+  Returns:
+    A set of feature columns
+  """
+  return set([tf.feature_column.numeric_column(my_feature)
+              for my_feature in input_features])
+
+
 def get_quantile_based_boundaries(feature_values, num_buckets):
     boundaries = np.arange(1.0, num_buckets) / num_buckets
     quantile = feature_values.quantile(boundaries)
@@ -92,7 +104,7 @@ def get_quantile_based_boundaries(feature_values, num_buckets):
     return [quantile[k] for k in quantile.keys()]
 
 
-def construct_feature_columns(training_examples):
+def construct_bucketized_feature_columns(training_examples):
     """Construct the TensorFlow Feature Columns.
 
     Args:
@@ -171,9 +183,9 @@ def train_model(
     steps_per_period = steps / periods
 
     # Create a linear regressor object.
-    my_optimizer = tf.train.FtrlOptimizer(learning_rate=learning_rate)
+    my_optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
     my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
-    linear_regressor = tf.estimator.LinearRegressor(
+    linear_classifier = tf.estimator.LinearClassifier(
         feature_columns=feature_columns,
         optimizer=my_optimizer
     )
@@ -181,61 +193,59 @@ def train_model(
     # Create input functions.
     training_input_fn = lambda: my_input_fn(
         training_examples,
-        training_targets["median_house_value"],
+        training_targets["median_house_value_is_high"],
         batch_size=batch_size)
     predict_training_input_fn = lambda: my_input_fn(
         training_examples,
-        training_targets["median_house_value"],
+        training_targets["median_house_value_is_high"],
         num_epochs=1,
         shuffle=False)
     predict_validation_input_fn = lambda: my_input_fn(
-        validation_examples, validation_targets["median_house_value"],
+        validation_examples, validation_targets["median_house_value_is_high"],
         num_epochs=1,
         shuffle=False)
 
     # Train the model, but do so inside a loop so that we can periodically assess
     # loss metrics.
     print("Training model... rate:%0.2f steps:%d batch:%d" % (learning_rate, steps, batch_size))
-    print("RMSE (on training data):")
-    training_rmse = []
-    validation_rmse = []
+    print("LogLoss (on training data):")
+    training_log_losses = []
+    validation_log_losses = []
     for period in range(0, periods):
         # Train the model, starting from the prior state.
-        linear_regressor.train(
+        linear_classifier.train(
             input_fn=training_input_fn,
             steps=steps_per_period,
         )
         # Take a break and compute predictions.
-        training_predictions = linear_regressor.predict(input_fn=predict_training_input_fn)
-        training_predictions = np.array([item['predictions'][0] for item in training_predictions])
+        training_probabilities = linear_classifier.predict(input_fn=predict_training_input_fn)
+        training_probabilities = np.array([item['probabilities'][0] for item in training_probabilities])
 
-        validation_predictions = linear_regressor.predict(input_fn=predict_validation_input_fn)
-        validation_predictions = np.array([item['predictions'][0] for item in validation_predictions])
+        validation_probabilities = linear_classifier.predict(input_fn=predict_validation_input_fn)
+        validation_probabilities = np.array([item['probabilities'][0] for item in validation_probabilities])
 
         # Compute training and validation loss.
-        training_root_mean_squared_error = math.sqrt(
-            metrics.mean_squared_error(training_predictions, training_targets))
-        validation_root_mean_squared_error = math.sqrt(
-            metrics.mean_squared_error(validation_predictions, validation_targets))
+        training_log_loss = metrics.log_loss(training_targets, training_probabilities)
+        validation_log_loss = metrics.log_loss(validation_targets, validation_probabilities)
         # Occasionally print the current loss.
         print("  period %02d (%d%%) : %0.2f, %0.2f" % (
-            period, (period / periods) * 100.0, training_root_mean_squared_error, validation_root_mean_squared_error))
+            period, (period / periods) * 100.0, training_log_loss, validation_log_loss))
         # Add the loss metrics from this period to our list.
-        training_rmse.append(training_root_mean_squared_error)
-        validation_rmse.append(validation_root_mean_squared_error)
+        training_log_losses.append(training_log_loss)
+        validation_log_losses.append(validation_log_loss)
     print("Model training finished.")
 
     # Output a graph of loss metrics over periods.
-    plt.ylabel("RMSE")
+    plt.ylabel("LogLoss")
     plt.xlabel("Periods")
-    plt.title("Root Mean Squared Error vs. Periods")
+    plt.title("LogLoss vs. Periods")
     plt.tight_layout()
-    plt.plot(training_rmse, label="training")
-    plt.plot(validation_rmse, label="validation")
+    plt.plot(training_log_losses, label="training")
+    plt.plot(validation_log_losses, label="validation")
     plt.legend()
     plt.show()
 
-    return linear_regressor
+    return linear_classifier
 
 
 def select_and_transform_features(source_df):
@@ -284,9 +294,9 @@ print("Validation targets summary:")
 display.display(validation_targets.describe())
 
 linear_regressor = train_model(
-    learning_rate=1.0,
+    learning_rate=0.000003,
     steps=500,
-    batch_size=100,
+    batch_size=20,
     feature_columns=construct_feature_columns(training_examples),
     training_examples=training_examples,
     training_targets=training_targets,
@@ -294,6 +304,7 @@ linear_regressor = train_model(
     validation_targets=validation_targets
 )
 
+commnent = """
 california_housing_test_data = pd.read_csv(
     "https://download.mlcc.google.com/mledu-datasets/california_housing_test.csv", sep=",")
 
@@ -302,14 +313,8 @@ test_targets = preprocess_targets(california_housing_test_data)
 
 predict_test_input_fn = lambda: my_input_fn(
     test_examples,
-    test_targets["median_house_value"],
+    test_targets["median_house_value_is_high"],
     num_epochs=1,
     shuffle=False)
+"""
 
-test_predictions = linear_regressor.predict(input_fn=predict_test_input_fn)
-test_predictions = np.array([item['predictions'][0] for item in test_predictions])
-
-root_mean_squared_error = math.sqrt(
-    metrics.mean_squared_error(test_predictions, test_targets))
-
-print("Final RMSE (on test data): %0.2f" % root_mean_squared_error)
