@@ -85,7 +85,14 @@ def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
     return features, labels
 
 
-def construct_feature_columns(input_features):
+def get_quantile_based_boundaries(feature_values, num_buckets):
+    boundaries = np.arange(1.0, num_buckets) / num_buckets
+    quantile = feature_values.quantile(boundaries)
+
+    return [quantile[k] for k in quantile.keys()]
+
+
+def construct_feature_columns(training_examples):
     """Construct the TensorFlow Feature Columns.
 
     Args:
@@ -93,14 +100,46 @@ def construct_feature_columns(input_features):
     Returns:
       A set of feature columns
     """
-    return set([tf.feature_column.numeric_column(my_feature)
-                for my_feature in input_features])
+
+    longitude = tf.feature_column.numeric_column('longitude')
+    latitude = tf.feature_column.numeric_column('latitude')
+    housing_median_age = tf.feature_column.numeric_column('housing_median_age')
+    households = tf.feature_column.numeric_column('households')
+    median_income = tf.feature_column.numeric_column('median_income')
+    rooms_per_person = tf.feature_column.numeric_column('rooms_per_person')
+
+    bucketized_longitude = tf.feature_column.bucketized_column(longitude, get_quantile_based_boundaries(
+        training_examples['longitude'], 10))
+    bucketized_latitude = tf.feature_column.bucketized_column(latitude, get_quantile_based_boundaries(
+        training_examples['latitude'], 10))
+    bucketized_housing_median_age = tf.feature_column.bucketized_column(housing_median_age, get_quantile_based_boundaries(
+        training_examples['housing_median_age'], 10))
+    bucketized_households = tf.feature_column.bucketized_column(households, get_quantile_based_boundaries(
+        training_examples['households'], 10))
+    bucketized_median_income = tf.feature_column.bucketized_column(median_income, get_quantile_based_boundaries(
+        training_examples['median_income'], 10))
+    bucketized_rooms_per_person = tf.feature_column.bucketized_column(rooms_per_person, get_quantile_based_boundaries(
+        training_examples['rooms_per_person'], 10))
+
+    long_x_lat = tf.feature_column.crossed_column(set([bucketized_latitude, bucketized_longitude]), hash_bucket_size=1000)
+
+    feature_columns = set([
+        bucketized_longitude,
+        bucketized_latitude,
+        bucketized_housing_median_age,
+        bucketized_households,
+        bucketized_median_income,
+        bucketized_rooms_per_person,
+        long_x_lat
+    ])
+    return feature_columns
 
 
 def train_model(
         learning_rate,
         steps,
         batch_size,
+        feature_columns,
         training_examples,
         training_targets,
         validation_examples,
@@ -132,10 +171,10 @@ def train_model(
     steps_per_period = steps / periods
 
     # Create a linear regressor object.
-    my_optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
+    my_optimizer = tf.train.FtrlOptimizer(learning_rate=learning_rate)
     my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
     linear_regressor = tf.estimator.LinearRegressor(
-        feature_columns=construct_feature_columns(training_examples),
+        feature_columns=feature_columns,
         optimizer=my_optimizer
     )
 
@@ -156,7 +195,7 @@ def train_model(
 
     # Train the model, but do so inside a loop so that we can periodically assess
     # loss metrics.
-    print("Training model...")
+    print("Training model... rate:%0.2f steps:%d batch:%d" % (learning_rate, steps, batch_size))
     print("RMSE (on training data):")
     training_rmse = []
     validation_rmse = []
@@ -179,8 +218,8 @@ def train_model(
         validation_root_mean_squared_error = math.sqrt(
             metrics.mean_squared_error(validation_predictions, validation_targets))
         # Occasionally print the current loss.
-        print("  period %02d : %0.2f, %0.2f" % (
-            period, training_root_mean_squared_error, validation_root_mean_squared_error))
+        print("  period %02d (%d%%) : %0.2f, %0.2f" % (
+            period, (period / periods) * 100.0, training_root_mean_squared_error, validation_root_mean_squared_error))
         # Add the loss metrics from this period to our list.
         training_rmse.append(training_root_mean_squared_error)
         validation_rmse.append(validation_root_mean_squared_error)
@@ -217,8 +256,11 @@ pd.options.display.max_columns = 15
 pd.options.display.float_format = '{:.1f}'.format
 
 california_housing_dataframe = pd.read_csv(
-    "https://download.mlcc.google.com/mledu-datasets/california_housing_train.csv", sep=",")
+    # "https://download.mlcc.google.com/mledu-datasets/california_housing_train.csv", sep=",")
+    "/Users/jack/Downloads/california_housing_train.csv", sep=",")
 
+california_housing_dataframe = california_housing_dataframe.reindex(
+    np.random.permutation(california_housing_dataframe.index))
 california_housing_dataframe = california_housing_dataframe.reindex(
     np.random.permutation(california_housing_dataframe.index))
 
@@ -241,29 +283,21 @@ display.display(training_targets.describe())
 print("Validation targets summary:")
 display.display(validation_targets.describe())
 
-# correlation
-
-correlation_dataframe = training_examples.copy()
-correlation_dataframe["result"] = training_targets["median_house_value"]
-
-print(correlation_dataframe.corr())
-
-minimal_training_examples = select_and_transform_features(training_examples)
-minimal_validation_examples = select_and_transform_features(validation_examples)
-
 linear_regressor = train_model(
-    learning_rate=0.03,
+    learning_rate=1.0,
     steps=500,
-    batch_size=5,
-    training_examples=minimal_training_examples,
+    batch_size=100,
+    feature_columns=construct_feature_columns(training_examples),
+    training_examples=training_examples,
     training_targets=training_targets,
-    validation_examples=minimal_validation_examples,
-    validation_targets=validation_targets)
+    validation_examples=validation_examples,
+    validation_targets=validation_targets
+)
 
 california_housing_test_data = pd.read_csv(
     "https://download.mlcc.google.com/mledu-datasets/california_housing_test.csv", sep=",")
 
-test_examples = select_and_transform_features(preprocess_features(california_housing_test_data))
+test_examples = preprocess_features(california_housing_test_data)
 test_targets = preprocess_targets(california_housing_test_data)
 
 predict_test_input_fn = lambda: my_input_fn(
