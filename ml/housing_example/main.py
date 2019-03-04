@@ -124,8 +124,60 @@ def construct_feature_columns(input_features):
     return set([tf.feature_column.numeric_column(each) for each in input_features])
 
 
+def linear_scale(serise):
+    min_val = serise.min()
+    max_val = serise.max()
+    scale = (max_val - min_val) / 2.0
+    return serise.apply(lambda x: ((x - min_val) / scale) - 1.0)
+
+
+def normalize_linear_scale(examples_dataframe):
+    for column in examples_dataframe.columns:
+        examples_dataframe[column] = linear_scale(examples_dataframe[column])
+
+    return examples_dataframe
+
+
+def log_normalize(series):
+    return series.apply(lambda x: math.log(x + 1.0))
+
+
+def clip(series, clip_to_min, clip_to_max):
+    return series.apply(lambda x: (
+        min(max(x, clip_to_min), clip_to_max)))
+
+
+def z_score_normalize(series):
+    mean = series.mean()
+    std_dv = series.std()
+    return series.apply(lambda x: (x - mean) / std_dv)
+
+
+def binary_threshold(series, threshold):
+    return series.apply(lambda x: (1 if x > threshold else 0))
+
+
+def normalize(examples_dataframe):
+    """Returns a version of the input `DataFrame` that has all its features normalized."""
+    processed_features = pd.DataFrame()
+
+    processed_features["households"] = log_normalize(examples_dataframe["households"])
+    processed_features["median_income"] = log_normalize(examples_dataframe["median_income"])
+    processed_features["total_bedrooms"] = log_normalize(examples_dataframe["total_bedrooms"])
+
+    processed_features["latitude"] = linear_scale(examples_dataframe["latitude"])
+    processed_features["longitude"] = linear_scale(examples_dataframe["longitude"])
+    processed_features["housing_median_age"] = linear_scale(examples_dataframe["housing_median_age"])
+
+    processed_features["population"] = linear_scale(clip(examples_dataframe["population"], 0, 5000))
+    processed_features["rooms_per_person"] = linear_scale(clip(examples_dataframe["rooms_per_person"], 0, 5))
+    processed_features["total_rooms"] = linear_scale(clip(examples_dataframe["total_rooms"], 0, 10000))
+
+    return processed_features
+
+
 def train_nn_regression_model(
-        learning_rate,
+        my_optimizer,
         steps,
         batch_size,
         hidden_units,
@@ -160,7 +212,6 @@ def train_nn_regression_model(
     periods = 10
     steps_per_period = steps / periods
 
-    my_optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
     my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
     dnn_regressor = tf.estimator.DNNRegressor(
         feature_columns=construct_feature_columns(training_examples),
@@ -207,7 +258,7 @@ def train_nn_regression_model(
 
     plt.ylabel("RMSE")
     plt.xlabel("Period")
-    plt.title("Root mean squared error. steps:%d learning:%f batch:%d" % (steps, learning_rate, batch_size))
+    plt.title("Root mean squared error")
 
     plt.tight_layout()
     plt.plot(training_rmse, label="training")
@@ -216,7 +267,7 @@ def train_nn_regression_model(
 
     plt.show()
 
-    return dnn_regressor
+    return dnn_regressor, training_rmse, validation_rmse
 
 
 def model_size(estimator):
@@ -379,32 +430,39 @@ display.display(training_targets.describe())
 print("Validation targets summary:")
 display.display(validation_targets.describe())
 
-dnn_regressor = train_nn_regression_model(
-    learning_rate=0.004,
-    steps=2000,
-    batch_size=100,
+normalized_dataframe = normalize(preprocess_features(california_housing_dataframe))
+normalized_training_examples = normalized_dataframe.head(12000)
+normalized_validation_examples = normalized_dataframe.tail(5000)
+
+_ = train_nn_regression_model(
+    my_optimizer=tf.train.AdagradOptimizer(learning_rate=0.15),
+    steps=1000,
+    batch_size=50,
     hidden_units=[10, 10],
-    training_examples=training_examples,
+    training_examples=normalized_training_examples,
     training_targets=training_targets,
-    validation_examples=validation_examples,
-    validation_targets=validation_targets
-)
+    validation_examples=normalized_validation_examples,
+    validation_targets=validation_targets)
 
-california_housing_test_data = pd.read_csv("https://download.mlcc.google.com/mledu-datasets/california_housing_test.csv", sep=",")
 
-test_examples=preprocess_features(california_housing_test_data)
-test_targets=preprocess_targets(california_housing_test_data)
+def location_location_location(examples_dataframe):
+    """Returns a version of the input `DataFrame` that keeps only the latitude and longitude."""
+    processed_features = pd.DataFrame()
+    processed_features["latitude"] = linear_scale(examples_dataframe["latitude"])
+    processed_features["longitude"] = linear_scale(examples_dataframe["longitude"])
+    return processed_features
 
-test_input_fn=lambda: my_input_fn(
-    features=test_examples,
-    targets=test_targets['median_house_value'],
-    shuffle=False,
-    num_epochs=1
-)
 
-test_predictions = dnn_regressor.predict(input_fn=test_input_fn)
-test_predictions = np.array([item['predictions'][0] for item in test_predictions])
+lll_dataframe = location_location_location(preprocess_features(california_housing_dataframe))
+lll_training_examples = lll_dataframe.head(12000)
+lll_validation_examples = lll_dataframe.tail(5000)
 
-t_rmse = math.sqrt(metrics.mean_squared_error(test_predictions, test_targets))
-
-print("RMSE of test : %.2f" % t_rmse)
+_ = train_nn_regression_model(
+    my_optimizer=tf.train.AdagradOptimizer(learning_rate=0.05),
+    steps=500,
+    batch_size=50,
+    hidden_units=[10, 10, 5, 5, 5],
+    training_examples=lll_training_examples,
+    training_targets=training_targets,
+    validation_examples=lll_validation_examples,
+    validation_targets=validation_targets)
